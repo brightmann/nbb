@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nbb",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true }
+  // Secrets (set in the Cloudflare dashboard or `wrangler secret put`):
+  //   DATABASE_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET,
+  //   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+  //   GOOGLE_CALLBACK_URL, FRONT_GOOGLE_CALLBACK_URL (optional),
+  //   OSS_ID, OSS_NAME, OSS_KEY, OSS_REGION (optional, Tencent COS upload keys)
+}
