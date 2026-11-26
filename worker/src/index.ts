@@ -144,6 +144,19 @@ const guard = async (c: Context<{ Bindings: Env; Variables: Vars }>, next: Next)
   await next();
 };
 
+// Optional auth: true only for a valid token whose user has role ADMIN. Never throws.
+async function isAdmin(c: Context<{ Bindings: Env; Variables: Vars }>): Promise<boolean> {
+  const m = /^Bearer\s+(.+)$/i.exec(c.req.header('Authorization') || '');
+  if (!m) return false;
+  try {
+    const payload = (await verify(m[1], c.env.JWT_ACCESS_SECRET, 'HS256')) as Row;
+    const user = payload.userId ? await findById(c.get('sql'), 'User', String(payload.userId)) : null;
+    return !!user && user.role === 'ADMIN';
+  } catch {
+    return false;
+  }
+}
+
 async function makeTokens(env: Env, userId: string) {
   const now = Math.floor(Date.now() / 1000);
   return {
@@ -313,19 +326,22 @@ app.post('/posts', guard, async (c) => {
 app.get('/posts', async (c) => {
   const sql = c.get('sql');
   const search = c.req.query('search');
+  const pub = (await isAdmin(c)) ? '' : 'p.published = true';
   const rows = (search
-    ? await sql(`${POST_SELECT} WHERE p.content ILIKE $1 ORDER BY p."createdAt" DESC`, [`%${search}%`])
-    : await sql(`${POST_SELECT} ORDER BY p."createdAt" DESC`)) as Row[];
+    ? await sql(`${POST_SELECT} WHERE p.content ILIKE $1${pub ? ' AND ' + pub : ''} ORDER BY p."createdAt" DESC`, [`%${search}%`])
+    : await sql(`${POST_SELECT}${pub ? ' WHERE ' + pub : ''} ORDER BY p."createdAt" DESC`)) as Row[];
   return c.json(rows.map(withCategory));
 });
 
 app.get('/posts/recent', async (c) => {
-  const rows = (await c.get('sql')(`${POST_SELECT} ORDER BY p."createdAt" DESC LIMIT 3`)) as Row[];
+  const pub = (await isAdmin(c)) ? '' : ' WHERE p.published = true';
+  const rows = (await c.get('sql')(`${POST_SELECT}${pub} ORDER BY p."createdAt" DESC LIMIT 3`)) as Row[];
   return c.json(rows.map(withCategory));
 });
 
 app.get('/posts/:id', async (c) => {
-  const rows = (await c.get('sql')(`${POST_SELECT} WHERE p.id=$1`, [(c.req.param('id') as string)])) as Row[];
+  const pub = (await isAdmin(c)) ? '' : ' AND p.published = true';
+  const rows = (await c.get('sql')(`${POST_SELECT} WHERE p.id=$1${pub}`, [(c.req.param('id') as string)])) as Row[];
   if (!rows.length) return c.body('');
   return c.json(withCategory(rows[0]));
 });
@@ -359,7 +375,9 @@ app.delete('/category/batch', guard, async (c) => {
 app.get('/category', async (c) => {
   const sql = c.get('sql');
   const cats = (await sql(`SELECT * FROM "Category"`)) as Row[];
-  const posts = (await sql(`SELECT * FROM "Post" WHERE "categoryId" IS NOT NULL`)) as Row[];
+  const posts = (await sql(
+    `SELECT * FROM "Post" WHERE "categoryId" IS NOT NULL${(await isAdmin(c)) ? '' : ' AND published = true'}`
+  )) as Row[];
   return c.json(
     cats.map((cat) => {
       const Post = posts.filter((p) => p.categoryId === cat.id);
@@ -459,7 +477,7 @@ function projectData(dto: Row): Row {
   return data;
 }
 
-async function projectsWithPost(sql: Sql, where: string, params: unknown[]): Promise<Row[]> {
+async function projectsWithPost(sql: Sql, where: string, params: unknown[], admin = true): Promise<Row[]> {
   const rows = (await sql(
     `SELECT pr.*, po.id AS "post_id", po."createdAt" AS "post_createdAt", po."updatedAt" AS "post_updatedAt",
             po.title AS "post_title", po.content AS "post_content", po.html AS "post_html", po.toc AS "post_toc",
@@ -475,7 +493,7 @@ async function projectsWithPost(sql: Sql, where: string, params: unknown[]): Pro
       if (k.startsWith('post_')) post[k.slice(5)] = r[k];
       else out[k] = r[k];
     }
-    out.post = post.id ? post : null;
+    out.post = post.id && (admin || post.published === true) ? post : null;
     return out;
   });
 }
@@ -486,7 +504,7 @@ app.post('/projects', guard, async (c) => {
   return c.json((await projectsWithPost(sql, 'WHERE pr.id=$1', [row.id]))[0], 201);
 });
 
-app.get('/projects', async (c) => c.json(await projectsWithPost(c.get('sql'), '', [])));
+app.get('/projects', async (c) => c.json(await projectsWithPost(c.get('sql'), '', [], await isAdmin(c))));
 
 app.delete('/projects/batch', guard, async (c) => {
   const ids = asIds(await body(c));
@@ -495,7 +513,7 @@ app.delete('/projects/batch', guard, async (c) => {
 });
 
 app.get('/projects/:id', async (c) => {
-  const rows = await projectsWithPost(c.get('sql'), 'WHERE pr.id=$1', [(c.req.param('id') as string)]);
+  const rows = await projectsWithPost(c.get('sql'), 'WHERE pr.id=$1', [(c.req.param('id') as string)], await isAdmin(c));
   return rows.length ? c.json(rows[0]) : c.body('');
 });
 
