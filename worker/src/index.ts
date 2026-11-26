@@ -157,6 +157,14 @@ async function isAdmin(c: Context<{ Bindings: Env; Variables: Vars }>): Promise<
   }
 }
 
+// Write routes: valid token AND role ADMIN. Others get 403.
+const adminGuard = async (c: Context<{ Bindings: Env; Variables: Vars }>, next: Next) => {
+  await guard(c, async () => {
+    if (c.get('user')?.role !== 'ADMIN') throw new HttpError(403, 'Forbidden');
+    await next();
+  });
+};
+
 async function makeTokens(env: Env, userId: string) {
   const now = Math.floor(Date.now() / 1000);
   return {
@@ -216,7 +224,7 @@ app.get('/', (c) => c.text('nbb'));
 app.get('/api', (c) => c.text('nbb api (cloudflare workers)'));
 app.get('/api-json', (c) => c.json({ openapi: '3.0.0', info: { title: 'nbb', version: '1.5' }, paths: {} }));
 
-app.get('/dashboard', guard, async (c) => {
+app.get('/dashboard', adminGuard, async (c) => {
   const sql = c.get('sql');
   const [post, photo, project] = await Promise.all([
     sql(`SELECT count(*)::int AS n FROM "Post"`),
@@ -227,7 +235,7 @@ app.get('/dashboard', guard, async (c) => {
 });
 
 // Tencent COS temporary key (same signing as src/oss/sts.js)
-app.get('/ossKey', guard, async (c) => {
+app.get('/ossKey', adminGuard, async (c) => {
   const secretId = c.env.OSS_ID ?? '';
   const secretKey = c.env.OSS_KEY ?? '';
   const bucket = c.env.OSS_NAME ?? '';
@@ -313,7 +321,7 @@ function withCategory(r: Row): Row {
 
 const POST_SELECT = `SELECT p.*, ${CAT_COLS} FROM "Post" p LEFT JOIN "Category" c ON c.id = p."categoryId"`;
 
-app.post('/posts', guard, async (c) => {
+app.post('/posts', adminGuard, async (c) => {
   const sql = c.get('sql');
   const dto = await body(c);
   const data = pick(dto, POST_KEYS);
@@ -346,7 +354,7 @@ app.get('/posts/:id', async (c) => {
   return c.json(withCategory(rows[0]));
 });
 
-app.patch('/posts/:id', guard, async (c) => {
+app.patch('/posts/:id', adminGuard, async (c) => {
   const sql = c.get('sql');
   const dto = await body(c);
   const data = pick(dto, POST_KEYS);
@@ -358,15 +366,15 @@ app.patch('/posts/:id', guard, async (c) => {
   return c.json(withCategory(rows[0]));
 });
 
-app.delete('/posts/:id', guard, async (c) => c.json(await remove(c.get('sql'), 'Post', (c.req.param('id') as string))));
+app.delete('/posts/:id', adminGuard, async (c) => c.json(await remove(c.get('sql'), 'Post', (c.req.param('id') as string))));
 
 // ---------- category ----------
-app.post('/category', guard, async (c) => {
+app.post('/category', adminGuard, async (c) => {
   const dto = await body(c);
   return c.json(await insert(c.get('sql'), 'Category', pick(dto, ['name'])), 201);
 });
 
-app.delete('/category/batch', guard, async (c) => {
+app.delete('/category/batch', adminGuard, async (c) => {
   const ids = asIds(await body(c));
   const rows = (await c.get('sql')(`DELETE FROM "Category" WHERE id = ANY($1::text[]) RETURNING id`, [ids])) as Row[];
   return c.json({ count: rows.length });
@@ -391,7 +399,7 @@ app.get('/category/:id', async (c) => {
   return row ? c.json(row) : c.body('');
 });
 
-app.patch('/category/:id', guard, async (c) => {
+app.patch('/category/:id', adminGuard, async (c) => {
   const sql = c.get('sql');
   const id = (c.req.param('id') as string);
   const data = pick(await body(c), ['name']);
@@ -403,7 +411,7 @@ app.patch('/category/:id', guard, async (c) => {
   return c.json(await update(sql, 'Category', id, data));
 });
 
-app.delete('/category/:id', guard, async (c) => c.json(await remove(c.get('sql'), 'Category', (c.req.param('id') as string))));
+app.delete('/category/:id', adminGuard, async (c) => c.json(await remove(c.get('sql'), 'Category', (c.req.param('id') as string))));
 
 // ---------- photos ----------
 const PHOTO_KEYS = ['url', 'title', 'content'];
@@ -416,7 +424,7 @@ async function photoWithTags(sql: Sql, photo: Row): Promise<Row> {
   return { ...photo, PhotoTags: tags };
 }
 
-app.post('/photos', guard, async (c) => {
+app.post('/photos', adminGuard, async (c) => {
   const sql = c.get('sql');
   const dto = await body(c);
   const tags = Array.from(new Set(asIds(dto.tags)));
@@ -442,7 +450,7 @@ app.get('/photos/tags', async (c) => c.json(await c.get('sql')(`SELECT * FROM "P
 
 app.get('/photos', async (c) => c.json(await c.get('sql')(`SELECT * FROM "Photo" ORDER BY "createdAt" DESC`)));
 
-app.delete('/photos/batch', guard, async (c) => {
+app.delete('/photos/batch', adminGuard, async (c) => {
   const ids = asIds(await body(c));
   const rows = (await c.get('sql')(`DELETE FROM "Photo" WHERE id = ANY($1::text[]) RETURNING id`, [ids])) as Row[];
   return c.json({ count: rows.length });
@@ -453,7 +461,7 @@ app.get('/photos/:id', async (c) => {
   return row ? c.json(row) : c.body('');
 });
 
-app.patch('/photos/:id', guard, async (c) => {
+app.patch('/photos/:id', adminGuard, async (c) => {
   const sql = c.get('sql');
   const id = (c.req.param('id') as string);
   const data = pick(await body(c), PHOTO_KEYS);
@@ -465,7 +473,7 @@ app.patch('/photos/:id', guard, async (c) => {
   return c.json(await update(sql, 'Photo', id, data));
 });
 
-app.delete('/photos/:id', guard, async (c) => c.json(await remove(c.get('sql'), 'Photo', (c.req.param('id') as string))));
+app.delete('/photos/:id', adminGuard, async (c) => c.json(await remove(c.get('sql'), 'Photo', (c.req.param('id') as string))));
 
 // ---------- projects ----------
 const PROJECT_KEYS = ['name', 'url', 'image', 'content', 'github', 'postId'];
@@ -498,7 +506,7 @@ async function projectsWithPost(sql: Sql, where: string, params: unknown[], admi
   });
 }
 
-app.post('/projects', guard, async (c) => {
+app.post('/projects', adminGuard, async (c) => {
   const sql = c.get('sql');
   const row = await insert(sql, 'Project', projectData(await body(c)));
   return c.json((await projectsWithPost(sql, 'WHERE pr.id=$1', [row.id]))[0], 201);
@@ -506,7 +514,7 @@ app.post('/projects', guard, async (c) => {
 
 app.get('/projects', async (c) => c.json(await projectsWithPost(c.get('sql'), '', [], await isAdmin(c))));
 
-app.delete('/projects/batch', guard, async (c) => {
+app.delete('/projects/batch', adminGuard, async (c) => {
   const ids = asIds(await body(c));
   const rows = (await c.get('sql')(`DELETE FROM "Project" WHERE id = ANY($1::text[]) RETURNING id`, [ids])) as Row[];
   return c.json({ count: rows.length });
@@ -517,7 +525,7 @@ app.get('/projects/:id', async (c) => {
   return rows.length ? c.json(rows[0]) : c.body('');
 });
 
-app.patch('/projects/:id', guard, async (c) => {
+app.patch('/projects/:id', adminGuard, async (c) => {
   const sql = c.get('sql');
   const id = (c.req.param('id') as string);
   const data = projectData(await body(c));
@@ -527,18 +535,18 @@ app.patch('/projects/:id', guard, async (c) => {
   return c.json(rows[0]);
 });
 
-app.delete('/projects/:id', guard, async (c) => c.json(await remove(c.get('sql'), 'Project', (c.req.param('id') as string))));
+app.delete('/projects/:id', adminGuard, async (c) => c.json(await remove(c.get('sql'), 'Project', (c.req.param('id') as string))));
 
 // ---------- settings ----------
 const SETTING_KEYS = [
   'github', 'githubAvatar', 'weibo', 'weiboAvatar', 'bilibili', 'bilibiliAvatar', 'twitter', 'twitterAvatar', 'photoLayout',
 ];
 
-app.post('/settings', guard, async (c) =>
+app.post('/settings', adminGuard, async (c) =>
   c.json(await insert(c.get('sql'), 'Setting', pick(await body(c), SETTING_KEYS)), 201)
 );
 
-app.post('/settings/photo', guard, async (c) => {
+app.post('/settings/photo', adminGuard, async (c) => {
   const sql = c.get('sql');
   const layout = await c.req.json().catch(() => []);
   const first = ((await sql(`SELECT * FROM "Setting" LIMIT 1`)) as Row[])[0];
@@ -551,7 +559,7 @@ app.get('/settings', async (c) => {
   return row ? c.json(row) : c.body('');
 });
 
-app.patch('/settings/:id', guard, async (c) => {
+app.patch('/settings/:id', adminGuard, async (c) => {
   const sql = c.get('sql');
   const id = (c.req.param('id') as string);
   const data = pick(await body(c), SETTING_KEYS);
@@ -601,7 +609,7 @@ app.delete('/comments/:id', guard, async (c) => {
   const id = (c.req.param('id') as string);
   const comment = await findById(sql, 'Comment', id);
   if (!comment) throw new HttpError(404, 'Comment not found');
-  if (comment.authorId !== c.get('user').id) throw new HttpError(403, 'Unauthorized');
+  if (comment.authorId !== c.get('user').id && c.get('user').role !== 'ADMIN') throw new HttpError(403, 'Unauthorized');
   return c.json(await remove(sql, 'Comment', id));
 });
 
